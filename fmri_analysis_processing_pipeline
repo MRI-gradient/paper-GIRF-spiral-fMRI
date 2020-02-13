@@ -1,0 +1,124 @@
+# Processing pipeline (using FSL) for spiral fMRI, as used in paper “Feasibility of spiral fMRI based on an LTI gradient model” 
+# Nadine N Graedel, January 2020
+
+# Important notes:
+# This purpose of this script is not to provide a ‘one-click analysis’ but to document the steps we used for processing. 
+# Examine processing result after each step to check quality of analysis (some parameters, such as the settings for brain extraction, registration and segmentation might need to be tailored for your specific input data). 
+
+###---------------------------
+# Step 1:  Convert .mat to nifti files in Matlab, use the resolution res = [0.8 0.8 1.0 3.306] 
+
+###-------------------------
+# Step 2: Run FEAT for all three reconstructions (moni, girf and nomi)
+# load feat_fmri_analysis.fsl file in FEAT to see settings used for fMRI analysis
+
+###-------------------------
+# Step 3: Prepare the structural data
+
+# Brain extraction - always check result and adjust parameters if required
+bet struct.nii.gz struct_brain.nii.gz -f 0.2
+
+# Registration of structural image to the center of monitored time series (which is used as the reference volume for MCFLIRT when running FEAT)
+flirt -in struct_brain.nii.gz -ref func_monitored_vol50.nii.gz -out struct_brain_reg2func6dof_interpspline.nii.gz -omat struct_brain_reg2func6dof_interpspline.mat -bins 256 -cost corratio -searchrx -3 3 -searchry -3 3 -searchrz -3 3 -dof 6 -interp spline
+
+# perform BET again (this is necessary for the segmentation using FAST to work well)
+bet struct_brain_reg2func6dof_interpspline struct_brain_reg2func6dof_interpspline_brain -f 0.2
+
+###---------------------------
+# Step 4: Segmentation of structural data
+
+fast -t 1 -n 3 -H 0.1 -I 10 -l 5.0 -g -b -o struct_brain_reg2func6dof_interpspline_brain struct_brain_reg2func6dof_interpspline_brain
+
+###---------------------------
+# Step 5: Register MNI to structural (struct_brain_reg2func6dof_interpspline_brain)
+
+# Automatic registration did not work well on this data. Therefore we used the Nudge tool in FSLeyes to align the data sets manually. Save the transformation file: nudge.mat. 
+
+###---------------------------
+# Step 6: Select V1-V3 in Juelich atlas and apply spatial transformation to subject space
+
+fslmaths JuelichAtlas.nii.gz -thr 81 -uthr 86 mask_V1to3.nii.gz # get the relevant areas
+
+fslmaths mask_V1to3.nii.gz -bin mask_V1to3_bin.nii.gz # binarize
+
+flirt -interp nearestneighbour -in mask_V1to3_bin.nii.gz -ref im_vol50_moni.nii.gz -applyxfm -init nudge.mat -out mask_V1to3_bin_reg.nii.gz 
+
+###---------------------------
+# Step 7: Generate GM V1-3 mask and WM V1-3 mask
+
+# WM
+fslmaths struct_brain_reg2func6dof_interpspline_brain_pve_1.nii.gz -add mask_V1to3_bin_reg2funcvol50.nii.gz mask_WM.nii.gz
+fslmaths mask_WM.nii.gz -thr 1.8 mask_WM_bin_thr1p8.nii.gz
+fslmaths mask_WM_bin_thr1p8.nii.gz -bin mask_WM_bin_thr1p8_bin.nii.gz 
+
+# GM
+fslmaths struct_brain_reg2func6dof_interpspline_brain_pve_2.nii.gz -add mask_V1to3_bin_reg2funcvol50.nii.gz mask_GM.nii.gz
+fslmaths mask_GM.nii.gz -thr 1.8 mask_GM_bin_thr1p8.nii.gz
+fslmaths mask_GM_bin_thr1p8.nii.gz -bin mask_GM_bin_thr1p8_bin.nii.gz 
+
+###---------------------------
+# Step 8: Run Matlab analysis for ROC plots in Fig.7
+roc_analysis.m
+
+###--------------------------
+# Step 9: processing of z-stats for Fig.6 
+# use output from FEAT analysis: zstat4
+
+# mask if all voxels > 2.3
+fslmaths zstat4_moni_masked.nii.gz -thr 2.3 -abs  -bin zstat4_moni_masked_thr2p3_bin.nii.gz 
+
+# mask if all voxels < 2.3
+fslmaths zstat4_moni_masked.nii.gz -uthr 2.3 -abs -bin zstat4_moni_masked_uthr2p3_bin.nii.gz 
+
+# mask if all voxels < -2.3
+fslmaths zstat4_moni_masked.nii.gz -uthr -2.3 -abs -bin zstat4_moni_masked_uthrm2p3_bin.nii.gz
+
+# mask if all voxels > -2.3
+fslmaths zstat4_moni_masked.nii.gz -thr -2.3 -abs -bin zstat4_moni_masked_thrm2p3_bin.nii.gz
+ 
+# mask if all |voxels| < 2.3
+fslmaths zstat4_moni_masked.nii.gz -abs -thr 2.3 -bin zstat4_moni_masked_abs_thr2p3_bin.nii.gz
+
+# mask if all |voxels| > 2.3
+fslmaths zstat4_moni_masked.nii.gz -abs -uthr 2.3 -bin  zstat4_moni_masked_abs_uthr2p3_bin.nii.gz
+
+# same for GIRF reconstruction
+fslmaths zstat4_girf_masked.nii.gz -thr 2.3 -abs -bin zstat4_girf_masked_thr2p3_bin.nii.gz 
+fslmaths zstat4_girf_masked.nii.gz -uthr -2.3 -abs -bin  zstat4_girf_masked_uthrm2p3_bin.nii.gz
+fslmaths zstat4_girf_masked.nii.gz -uthr 2.3 -abs  -bin zstat4_girf_masked_uthr2p3_bin.nii.gz 
+fslmaths zstat4_girf_masked.nii.gz -thr -2.3 -abs -bin  zstat4_girf_masked_thrm2p3_bin.nii.gz  
+fslmaths zstat4_girf_masked.nii.gz -abs -uthr 2.3 -bin zstat4_girf_masked_abs_uthr2p3_bin.nii.gz  
+
+# same for nominal reconstruction
+fslmaths zstat4_nomi_masked.nii.gz -thr 2.3  -abs -bin zstat4_nomi_masked_thr2p3_bin.nii.gz 
+fslmaths zstat4_nomi_masked.nii.gz -uthr -2.3  -abs -bin zstat4_nomi_masked_uthrm2p3_bin.nii.gz
+fslmaths zstat4_nomi_masked.nii.gz -uthr 2.3 -abs -bin zstat4_nomi_masked_uthr2p3_bin.nii.gz 
+fslmaths zstat4_nomi_masked.nii.gz -thr -2.3 -abs -bin zstat4_nomi_masked_thrm2p3_bin.nii.gz  
+fslmaths zstat4_nomi_masked.nii.gz -abs -uthr 2.3 -bin zstat4_nomi_masked_abs_uthr2p3_bin.nii.gz 
+
+# true positives--> (1) z > 2.3 for both OR (2) z < -2.3 for both 
+fslmaths zstat4_girf_masked_thr2p3_bin.nii.gz -mul zstat4_moni_masked_thr2p3_bin.nii.gz zstat4_girf_truepos_pos.nii.gz
+fslmaths zstat4_girf_masked_uthrm2p3_bin.nii.gz -mul zstat4_moni_masked_uthrm2p3_bin.nii.gz zstat4_girf_truepos_neg.nii.gz
+fslmaths zstat4_girf_truepos_pos.nii.gz -add zstat4_girf_truepos_neg.nii.gz zstat4_girf_truepos.nii.gz
+
+# false positives--> (1) z > 2.3 for girf and z < 2.3 for moni OR (2) z < -2.3 for girf and z > -2.3 for moni
+fslmaths zstat4_girf_masked_thr2p3_bin.nii.gz -mul zstat4_moni_masked_uthr2p3_bin.nii.gz zstat4_girf_falsepos_pos.nii.gz
+fslmaths zstat4_girf_masked_uthrm2p3_bin.nii.gz -mul zstat4_moni_masked_thrm2p3_bin.nii.gz zstat4_girf_falsepos_neg.nii.gz
+fslmaths zstat4_girf_falsepos_pos.nii.gz -add zstat4_girf_falsepos_neg.nii.gz zstat4_girf_falsepos.nii.gz
+
+# false negatives --> (1) |z| < 2.3 for girf and |z| > 2.3 for moni
+fslmaths zstat4_girf_masked_abs_uthr2p3_bin.nii.gz -mul zstat4_moni_masked_abs_thr2p3_bin.nii.gz zstat3_girf_falseneg.nii.gz
+
+# same for nominal
+# true positives--> (1) z > 2.3 for both OR (2) z < -2.3 for both 
+fslmaths zstat4_nomi_masked_thr2p3_bin.nii.gz -mul zstat4_moni_masked_thr2p3_bin.nii.gz zstat4_nomi_truepos_pos.nii.gz
+fslmaths zstat4_nomi_masked_uthrm2p3_bin.nii.gz -mul zstat4_moni_masked_uthrm2p3_bin.nii.gz zstat4_nomi_truepos_neg.nii.gz
+fslmaths zstat4_nomi_truepos_pos.nii.gz -add zstat4_nomi_truepos_neg.nii.gz zstat4_nomi_truepos.nii.gz
+
+# false positives--> (1) z > 2.3 for nomi and z < 2.3 for moni OR (2) z < -2.3 for nomi and z > -2.3 for moni
+fslmaths zstat4_nomi_masked_thr2p3_bin.nii.gz -mul zstat4_moni_masked_uthr2p3_bin.nii.gz zstat4_nomi_falsepos_pos.nii.gz
+fslmaths zstat4_nomi_masked_uthrm2p3_bin.nii.gz -mul zstat4_moni_masked_thrm2p3_bin.nii.gz zstat4_nomi_falsepos_neg.nii.gz
+fslmaths zstat4_nomi_falsepos_pos.nii.gz -add zstat4_nomi_falsepos_neg.nii.gz zstat4_nomi_falsepos.nii.gz
+
+# false negatives --> (1) |z| < 2.3 for nomi and |z| > 2.3 for moni
+fslmaths zstat4_nomi_masked_abs_uthr2p3_bin.nii.gz -mul zstat4_moni_masked_abs_thr2p3_bin.nii.gz zstat4_nomi_falseneg.nii.gz
